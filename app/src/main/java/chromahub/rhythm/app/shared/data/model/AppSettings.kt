@@ -970,12 +970,12 @@ class AppSettings private constructor(context: Context) {
     private val _artistCollaborationMode = MutableStateFlow(prefs.getBoolean(KEY_ARTIST_COLLABORATION_MODE, false))
     val artistCollaborationMode: StateFlow<Boolean> = _artistCollaborationMode.asStateFlow()
     
-    // Library Tab Order
-    private val defaultTabOrder = listOf("SONGS", "LIKED", "PLAYLISTS", "ALBUMS", "ARTISTS", "ALBUM_ARTISTS", "EXPLORER")
+    // Library Tab Order (VYBE: local folder EXPLORER removed)
+    private val defaultTabOrder = listOf("SONGS", "LIKED", "PLAYLISTS", "ALBUMS", "ARTISTS", "ALBUM_ARTISTS")
     private val _libraryTabOrder = MutableStateFlow(
         prefs.getString(KEY_LIBRARY_TAB_ORDER, null)
             ?.split(",")
-            ?.filter { it.isNotBlank() }
+            ?.filter { it.isNotBlank() && it != "EXPLORER" }
             ?.takeIf { it.isNotEmpty() }
             ?.let { order ->
                 val withLiked = if ("LIKED" in order) order
@@ -1630,7 +1630,7 @@ class AppSettings private constructor(context: Context) {
     }
 
     private val _homeShowRhythmGuard = MutableStateFlow(
-        prefs.getBoolean(KEY_HOME_SHOW_RHYTHM_GUARD, true)
+        prefs.getBoolean(KEY_HOME_SHOW_RHYTHM_GUARD, false)
     )
     val homeShowRhythmGuard: StateFlow<Boolean> = _homeShowRhythmGuard.asStateFlow()
     fun setHomeShowRhythmGuard(value: Boolean) {
@@ -6172,7 +6172,7 @@ private val _autoCheckForUpdates = MutableStateFlow(prefs.getBoolean(KEY_AUTO_CH
         prefs.edit { putBoolean(KEY_HOME_SHOW_RECOMMENDED, value) }
     }
     
-    private val _homeShowListeningStats = MutableStateFlow(prefs.getBoolean(KEY_HOME_SHOW_LISTENING_STATS, true))
+    private val _homeShowListeningStats = MutableStateFlow(prefs.getBoolean(KEY_HOME_SHOW_LISTENING_STATS, false))
     val homeShowListeningStats: StateFlow<Boolean> = _homeShowListeningStats.asStateFlow()
     fun setHomeShowListeningStats(value: Boolean) {
         _homeShowListeningStats.value = value
@@ -6186,14 +6186,14 @@ private val _autoCheckForUpdates = MutableStateFlow(prefs.getBoolean(KEY_AUTO_CH
         prefs.edit { putBoolean(KEY_STREAMING_HOME_SHOW_GREETING, value) }
     }
 
-    private val _streamingHomeShowRhythmGuard = MutableStateFlow(prefs.getBoolean(KEY_STREAMING_HOME_SHOW_RHYTHM_GUARD, true))
+    private val _streamingHomeShowRhythmGuard = MutableStateFlow(prefs.getBoolean(KEY_STREAMING_HOME_SHOW_RHYTHM_GUARD, false))
     val streamingHomeShowRhythmGuard: StateFlow<Boolean> = _streamingHomeShowRhythmGuard.asStateFlow()
     fun setStreamingHomeShowRhythmGuard(value: Boolean) {
         _streamingHomeShowRhythmGuard.value = value
         prefs.edit { putBoolean(KEY_STREAMING_HOME_SHOW_RHYTHM_GUARD, value) }
     }
 
-    private val _streamingHomeShowRhythmStats = MutableStateFlow(prefs.getBoolean(KEY_STREAMING_HOME_SHOW_RHYTHM_STATS, true))
+    private val _streamingHomeShowRhythmStats = MutableStateFlow(prefs.getBoolean(KEY_STREAMING_HOME_SHOW_RHYTHM_STATS, false))
     val streamingHomeShowRhythmStats: StateFlow<Boolean> = _streamingHomeShowRhythmStats.asStateFlow()
     fun setStreamingHomeShowRhythmStats(value: Boolean) {
         _streamingHomeShowRhythmStats.value = value
@@ -6724,36 +6724,36 @@ private val _autoCheckForUpdates = MutableStateFlow(prefs.getBoolean(KEY_AUTO_CH
         prefs.edit { putBoolean(KEY_TAP_LYRICS_TO_SEEK, value) }
     }
     
-    // Default section order for home screen
+    // Default section order for home screen (VYBE: Rhythm Guard & Rhythm Stats removed)
     private val defaultHomeSectionOrder = listOf(
-        "DISCOVER", "RECENTLY_PLAYED", "ARTISTS", "RHYTHM_GUARD",
-        "NEW_RELEASES", "RECENTLY_ADDED", "RECOMMENDED", "STATS", "MOOD"
+        "DISCOVER", "RECENTLY_PLAYED", "ARTISTS",
+        "NEW_RELEASES", "RECENTLY_ADDED", "RECOMMENDED", "MOOD"
     )
     private val _homeSectionOrder = MutableStateFlow(
         prefs.getString(KEY_HOME_SECTION_ORDER, null)
             ?.split(",")
             ?.map(String::trim)
-            ?.filter { it.isNotBlank() && it != "GREETING" }
+            ?.filter { it.isNotBlank() && it != "GREETING" && it != "RHYTHM_GUARD" && it != "STATS" && it != "RHYTHM_STATS" }
             ?.takeIf { it.isNotEmpty() }
             ?: defaultHomeSectionOrder
     )
     val homeSectionOrder: StateFlow<List<String>> = _homeSectionOrder.asStateFlow()
     fun setHomeSectionOrder(value: List<String>) {
-        _homeSectionOrder.value = value
-        prefs.edit { putString(KEY_HOME_SECTION_ORDER, value.joinToString(",")) }
+        val cleaned = value.filter { it != "RHYTHM_GUARD" && it != "STATS" && it != "RHYTHM_STATS" }
+        _homeSectionOrder.value = cleaned
+        prefs.edit { putString(KEY_HOME_SECTION_ORDER, cleaned.joinToString(",")) }
     }
 
     private val defaultStreamingHomeSectionOrder = listOf(
-        "DISCOVER", "RECENTLY_PLAYED", "ARTISTS", "RHYTHM_GUARD", "RHYTHM_STATS", "NEW_RELEASES"
+        "DISCOVER", "RECENTLY_PLAYED", "ARTISTS", "NEW_RELEASES"
     )
 
     private fun normalizeStreamingHomeSectionOrder(rawSections: List<String>): List<String> {
         val normalized = rawSections
             .map(String::trim)
-            .filter { it != "PLAYLISTS" && it.isNotBlank() }
+            .filter { it != "PLAYLISTS" && it != "RHYTHM_GUARD" && it != "RHYTHM_STATS" && it != "STATS" && it.isNotBlank() }
             .map {
                 when (it) {
-                    "STATS" -> "RHYTHM_STATS"
                     "RECOMMENDED" -> "DISCOVER"
                     "GREETING" -> "DISCOVER"
                     else -> it

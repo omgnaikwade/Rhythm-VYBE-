@@ -103,7 +103,28 @@ data class SearchableSettingItem(
  * Builds the complete search index for all settings in the app
  */
 fun buildSettingsSearchIndex(context: Context): List<SearchableSettingItem> {
+    val removedRoutes = setOf(
+        SettingsRoutes.MEDIA_SCAN,
+        SettingsRoutes.BACKUP_RESTORE,
+        SettingsRoutes.RHYTHM_GUARD,
+        SettingsRoutes.RHYTHM_STATS,
+        SettingsRoutes.UPDATES,
+        SettingsRoutes.EXTERNAL_PLAYER_CUSTOMIZATION,
+        SettingsRoutes.GO_SETTINGS,
+        SettingsRoutes.API_MANAGEMENT
+    )
     return buildList {
+        // ======================== VYBE STREAMING & API ========================
+        add(SearchableSettingItem(
+            id = "vybe_music_provider",
+            title = context.getString(R.string.settings_music_provider),
+            description = context.getString(R.string.settings_music_provider_desc),
+            keywords = listOf("vybe", "provider", "music provider", "api", "dummy", "custom", "base url", "streaming", "backend", "catalog"),
+            icon = MaterialSymbolIcon("cloud_queue", filled = true),
+            route = SettingsRoutes.MUSIC_PROVIDER,
+            parentScreen = "Streaming & API"
+        ))
+
         // ======================== MAIN SETTINGS SCREEN ========================
         
         // Look & Feel Section
@@ -2825,7 +2846,7 @@ fun buildSettingsSearchIndex(context: Context): List<SearchableSettingItem> {
             parentScreen = context.getString(R.string.settings_shapes),
             settingKey = "expressiveShapeMiniPlayer"
         ))
-    }
+    }.filterNot { it.route in removedRoutes }
 }
 
 /**

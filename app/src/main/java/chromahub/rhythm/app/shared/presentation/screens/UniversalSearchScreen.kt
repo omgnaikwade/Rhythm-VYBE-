@@ -98,6 +98,10 @@ import chromahub.rhythm.app.shared.presentation.components.SettingScope
 import chromahub.rhythm.app.shared.presentation.components.common.M3PlaceholderType
 import chromahub.rhythm.app.shared.presentation.components.dialogs.SwitchModeDialog
 import chromahub.rhythm.app.ui.LocalMiniPlayerPadding
+import chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper.toAlbum
+import chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper.toArtist
+import chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper.toPlaylist
+import chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper.toSong
 import chromahub.rhythm.app.util.GenreUtils
 import chromahub.rhythm.app.util.HapticUtils
 import chromahub.rhythm.app.util.HapticType
@@ -239,97 +243,109 @@ fun UniversalSearchScreen(
     val searchHistory by localViewModel.searchHistory.collectAsState()
     val favoriteSongs by localViewModel.favoriteSongs.collectAsState()
 
-    val streamingSessions by streamingViewModel.serviceSessions.collectAsState()
-    val isGoModeConfigured = remember(streamingSessions) { streamingViewModel.isConfigured() }
-    val isGoModeActive = appMode == "STREAMING" && isGoModeConfigured
+    val vybeSearchResults by localViewModel.vybeSearchResults.collectAsState()
+    val isSearchingCatalog by localViewModel.isSearchingCatalog.collectAsState()
+    val searchCatalogError by localViewModel.searchCatalogError.collectAsState()
 
-    val streamingQuery by streamingViewModel.searchQuery.collectAsState()
-    val streamingResults by streamingViewModel.searchResults.collectAsState()
-    val isStreamingLoading by streamingViewModel.isLoading.collectAsState()
+    val isGoModeActive = false
+    val streamingResults = remember {
+        chromahub.rhythm.app.features.streaming.presentation.viewmodel.StreamingSearchResults()
+    }
+    val isStreamingLoading = isSearchingCatalog
     val streamingLikedSongs by streamingViewModel.likedSongs.collectAsState()
 
     val isGenreDetectionComplete by localViewModel.isGenreDetectionComplete.collectAsState()
     val streamingBrowseCategories by streamingViewModel.browseCategories.collectAsState()
 
-    val genres = remember(localSongs, streamingBrowseCategories, streamingResults.songs, isGoModeActive) {
-        val localGenres = localSongs
+    val genres = remember(localSongs) {
+        localSongs
             .flatMap { song -> GenreUtils.splitGenres(song.genre) }
-        val streamingGenres = if (isGoModeActive) {
-            streamingBrowseCategories.map { it.name } +
-                streamingResults.songs.flatMap { song -> GenreUtils.splitGenres(song.genre) }
-        } else emptyList()
-        (localGenres + streamingGenres)
             .distinctBy { it.lowercase() }
             .sortedBy { it.lowercase() }
     }
 
-    val genreSongCounts = remember(genres, localSongs, streamingResults.songs, isGoModeActive) {
+    val genreSongCounts = remember(genres, localSongs) {
         genres.associateWith { genre ->
-            localSongs.count { song -> GenreUtils.matchesGenre(song.genre, genre) } +
-                if (isGoModeActive) streamingResults.songs.count { song -> GenreUtils.matchesGenre(song.genre, genre) } else 0
+            localSongs.count { song -> GenreUtils.matchesGenre(song.genre, genre) }
         }
     }
 
-    LaunchedEffect(query, isGoModeActive) {
-        if (query.isNotBlank() && isGoModeActive) {
-            if (streamingQuery != query) {
-                streamingViewModel.search(query)
-            }
+    LaunchedEffect(query) {
+        val trimmed = query.trim()
+        if (trimmed.isNotEmpty()) {
+            delay(220)
+            localViewModel.searchCatalog(trimmed)
         } else {
-            streamingViewModel.clearSearch()
+            localViewModel.clearCatalogSearch()
         }
     }
 
-    val matchedLocalSongs = remember(query, localSongs, filterSongs) {
+    val providerSongs = remember(vybeSearchResults) {
+        vybeSearchResults.tracks.map { it.toSong() }
+    }
+    val providerAlbums = remember(vybeSearchResults) {
+        vybeSearchResults.albums.map { it.toAlbum() }
+    }
+    val providerArtists = remember(vybeSearchResults) {
+        vybeSearchResults.artists.map { it.toArtist() }
+    }
+    val providerPlaylists = remember(vybeSearchResults) {
+        vybeSearchResults.playlists.map { it.toPlaylist() }
+    }
+
+    val matchedLocalSongs = remember(query, localSongs, providerSongs, filterSongs) {
         if (!filterSongs || query.isBlank()) emptyList()
         else {
             val lowerQuery = query.lowercase()
-            localSongs.filter {
+            val cachedMatches = localSongs.filter {
                 it.title.lowercase().contains(lowerQuery) ||
-                        it.artist.lowercase().contains(lowerQuery) ||
-                        it.album.lowercase().contains(lowerQuery) ||
-                        GenreUtils.matchesGenreQuery(it.genre, lowerQuery)
+                    it.artist.lowercase().contains(lowerQuery) ||
+                    it.album.lowercase().contains(lowerQuery) ||
+                    GenreUtils.matchesGenreQuery(it.genre, lowerQuery)
             }
+            (providerSongs + cachedMatches).distinctBy { it.id }
         }
     }
-    val matchedLocalAlbums = remember(query, fullLocalAlbums, filterAlbums) {
+    val matchedLocalAlbums = remember(query, fullLocalAlbums, providerAlbums, filterAlbums) {
         if (!filterAlbums || query.isBlank()) emptyList()
         else {
             val lowerQuery = query.lowercase()
-            fullLocalAlbums.filter { album ->
+            val cachedMatches = fullLocalAlbums.filter { album ->
                 album.title.contains(query, true) ||
-                album.artist.contains(query, true) ||
-                album.songs.any { it.title.lowercase().contains(lowerQuery) }
+                    album.artist.contains(query, true) ||
+                    album.songs.any { it.title.lowercase().contains(lowerQuery) }
             }
+            (providerAlbums + cachedMatches).distinctBy { it.id }
         }
     }
-    val matchedLocalArtists = remember(query, localArtists, filterArtists) {
+    val matchedLocalArtists = remember(query, localArtists, providerArtists, filterArtists) {
         if (!filterArtists || query.isBlank()) emptyList()
-        else localArtists.filter { it.name.contains(query, true) }
-    }
-    val matchedLocalPlaylists = remember(query, localPlaylists, filterPlaylists) {
-        if (!filterPlaylists || query.isBlank()) emptyList()
-        else localPlaylists.filter { it.name.contains(query, true) }
-    }
-
-    val matchedStreamingSongs = if (filterSongs && isGoModeActive) streamingResults.songs else emptyList()
-    val matchedStreamingAlbums = if (filterAlbums && isGoModeActive) streamingResults.albums else emptyList()
-    val matchedStreamingArtists = if (filterArtists && isGoModeActive) streamingResults.artists else emptyList()
-    val matchedStreamingPlaylists = if (filterPlaylists && isGoModeActive) streamingResults.playlists else emptyList()
-
-    val hasResults = matchedLocalSongs.isNotEmpty() || matchedStreamingSongs.isNotEmpty() ||
-            matchedLocalAlbums.isNotEmpty() || matchedStreamingAlbums.isNotEmpty() ||
-            matchedLocalArtists.isNotEmpty() || matchedStreamingArtists.isNotEmpty() ||
-            matchedLocalPlaylists.isNotEmpty() || matchedStreamingPlaylists.isNotEmpty()
-
-    val handleAction = { itemMode: String, action: () -> Unit ->
-        if (itemMode == appMode) {
-            action()
-        } else {
-            targetModeForPendingAction = itemMode
-            pendingAction = action
-            showSwitchDialog = true
+        else {
+            val cachedMatches = localArtists.filter { it.name.contains(query, true) }
+            (providerArtists + cachedMatches).distinctBy { it.id }
         }
+    }
+    val matchedLocalPlaylists = remember(query, localPlaylists, providerPlaylists, filterPlaylists) {
+        if (!filterPlaylists || query.isBlank()) emptyList()
+        else {
+            val cachedMatches = localPlaylists.filter { it.name.contains(query, true) }
+            (providerPlaylists + cachedMatches).distinctBy { it.id }
+        }
+    }
+
+    val matchedStreamingSongs = emptyList<StreamingSong>()
+    val matchedStreamingAlbums = emptyList<StreamingAlbum>()
+    val matchedStreamingArtists = emptyList<StreamingArtist>()
+    val matchedStreamingPlaylists = emptyList<StreamingPlaylist>()
+
+    val hasResults = matchedLocalSongs.isNotEmpty() ||
+            matchedLocalAlbums.isNotEmpty() ||
+            matchedLocalArtists.isNotEmpty() ||
+            matchedLocalPlaylists.isNotEmpty()
+
+    // VYBE uses a unified streaming catalog; never prompt to switch between Local and Go modes.
+    val handleAction = { _: String, action: () -> Unit ->
+        action()
     }
 
     val handleBack = {
@@ -692,20 +708,52 @@ fun UniversalSearchScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        item(key = "no_results") {
-                            ExpressiveCookieEmptyState(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 48.dp)
-                                    .animateItem(),
-                                title = stringResource(R.string.no_results_found),
-                                subtitle = stringResource(R.string.search_no_results_query_format, query),
-                                mainIcon = RhythmIcons.Search,
-                                accentIcon = RhythmIcons.Search,
-                                cornerIcon = RhythmIcons.MusicNote,
-                                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                        if (searchCatalogError != null) {
+                            item(key = "search_error") {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(24.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 24.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(20.dp),
+                                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                                    ) {
+                                        Text(
+                                            text = "Search failed",
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                        Text(
+                                            text = searchCatalogError ?: "",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                                        )
+                                        Button(onClick = { localViewModel.searchCatalog(query) }) {
+                                            Text("Retry")
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            item(key = "no_results") {
+                                ExpressiveCookieEmptyState(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 48.dp)
+                                        .animateItem(),
+                                    title = stringResource(R.string.no_results_found),
+                                    subtitle = stringResource(R.string.search_no_results_query_format, query),
+                                    mainIcon = RhythmIcons.Search,
+                                    accentIcon = RhythmIcons.Search,
+                                    cornerIcon = RhythmIcons.MusicNote,
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
                         }
                     }
                 } else if (isLandscapeTablet) {
@@ -726,7 +774,7 @@ fun UniversalSearchScreen(
                             ),
                             verticalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            if (isGoModeActive && isStreamingLoading && !hasResults) {
+                            if (isStreamingLoading && !hasResults) {
                                 item(key = "loading_left") {
                                     Box(modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp), contentAlignment = Alignment.Center) {
                                         M3CircularLoader(modifier = Modifier.size(48.dp), strokeWidth = 4f)
@@ -974,7 +1022,7 @@ fun UniversalSearchScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        if (isGoModeActive && isStreamingLoading && !hasResults) {
+                        if (isStreamingLoading && !hasResults) {
                             item(key = "loading") {
                                 Box(modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp).animateItem(), contentAlignment = Alignment.Center) {
                                     M3CircularLoader(modifier = Modifier.size(48.dp), strokeWidth = 4f)

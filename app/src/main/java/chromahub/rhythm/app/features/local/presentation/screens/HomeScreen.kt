@@ -1149,8 +1149,8 @@ private fun StreamingHomeBody(
             "NEW_RELEASES" -> showNewReleases && effectiveAlbums.isNotEmpty()
             "ARTISTS" -> showArtists && effectiveArtists.isNotEmpty()
             "RECOMMENDED", "DISCOVER" -> showRecommended && !isSyncing && effectiveSongs.isNotEmpty()
-            "RHYTHM_GUARD" -> hasStreamingContent && showRhythmGuardSection && rhythmGuardMode != AppSettings.RHYTHM_GUARD_MODE_OFF
-            "STATS", "RHYTHM_STATS" -> !isSyncing && hasStreamingContent && showRhythmStatsSection
+            "RHYTHM_GUARD" -> false
+            "STATS", "RHYTHM_STATS" -> false
             else -> false
         }
 
@@ -1391,6 +1391,9 @@ private fun ModernScrollableContent(
     val heightSizeClass = windowSizeClass.heightSizeClass
     val scrollState = rememberScrollState()
     val allSongs by musicViewModel.filteredSongs.collectAsState()
+    val isLoadingCatalog by musicViewModel.isLoadingCatalog.collectAsState()
+    val catalogError by musicViewModel.catalogError.collectAsState()
+    val activeProviderInfo by musicViewModel.activeProviderInfo.collectAsState()
 
     // Home Screen Customization Settings
     val appSettings = AppSettings.getInstance(context)
@@ -1570,6 +1573,61 @@ private fun ModernScrollableContent(
             verticalArrangement = Arrangement.spacedBy(sectionSpacing),
             contentPadding = PaddingValues(bottom = 24.dp + LocalMiniPlayerPadding.current.calculateBottomPadding())
         ) {
+            if (catalogError != null) {
+                item(key = "vybe_catalog_error") {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = horizontalPadding)
+                            .padding(top = 8.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(20.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "${activeProviderInfo.displayName} unavailable",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                            Text(
+                                text = catalogError ?: "",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                Button(onClick = { musicViewModel.retryLoadCatalog() }) {
+                                    Text("Retry")
+                                }
+                                OutlinedButton(onClick = onSettingsClick) {
+                                    Text("Provider Settings")
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (isLoadingCatalog && songs.isEmpty()) {
+                item(key = "vybe_catalog_loading") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = horizontalPadding, vertical = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        CircularWavyProgressIndicator()
+                        Text(
+                            text = "Loading ${activeProviderInfo.displayName}...",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
         @Composable
         fun RenderLocalSection(sectionId: String) {
             when (sectionId) {
@@ -1813,8 +1871,8 @@ private fun ModernScrollableContent(
             "NEW_RELEASES" -> showNewReleases
             "RECENTLY_ADDED" -> showRecentlyAdded
             "RECOMMENDED" -> showRecommended
-            "RHYTHM_GUARD" -> showRhythmGuardWidget && rhythmGuardMode != AppSettings.RHYTHM_GUARD_MODE_OFF
-            "STATS" -> showListeningStats
+            "RHYTHM_GUARD" -> false
+            "STATS", "RHYTHM_STATS" -> false
             else -> false
         }
 

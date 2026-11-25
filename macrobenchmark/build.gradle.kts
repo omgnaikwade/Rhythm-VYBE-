@@ -8,11 +8,7 @@ plugins {
 
 android {
     namespace = "chromahub.rhythm.app.macrobenchmark"
-    compileSdk {
-        version = release(37) {
-            minorApiLevel = 2
-        }
-    }
+    compileSdk = 37
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -47,16 +43,7 @@ android {
         }
     }
 
-    // Mirror the :app product flavor dimensions so Gradle can match variants
-    flavorDimensions += "distribution"
-    productFlavors {
-        create("github") {
-            dimension = "distribution"
-        }
-        create("fdroid") {
-            dimension = "distribution"
-        }
-    }
+
 }
 
 dependencies {

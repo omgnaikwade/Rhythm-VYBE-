@@ -58,14 +58,19 @@ class RhythmApplication : Application(), ImageLoaderFactory {
         instance = this
         
         Log.d(TAG, "═══════════════════════════════════════════════════")
-        Log.d(TAG, "RhythmApplication onCreate")
+        Log.d(TAG, "VYBE Application onCreate")
         Log.d(TAG, "Build Type: ${BuildConfig.BUILD_TYPE}")
         Log.d(TAG, "Version: ${BuildConfig.VERSION_NAME}")
+        Log.d(TAG, "Music Provider: ${BuildConfig.MUSIC_PROVIDER}")
         Log.d(TAG, "═══════════════════════════════════════════════════")
         
         // Initialize AppSettings early (singleton, uses application context)
         val settings = AppSettings.getInstance(applicationContext)
         Log.d(TAG, "✓ AppSettings initialized")
+
+        // Initialize VYBE API configuration and provider registry
+        chromahub.rhythm.app.vybe.di.VybeServiceLocator.provideMusicRepository(applicationContext)
+        Log.d(TAG, "✓ VYBE MusicProvider initialized")
 
         // Apply the user's theme preference to the system configuration so the
         // system splash screen and window background match the app theme
@@ -96,7 +101,7 @@ class RhythmApplication : Application(), ImageLoaderFactory {
             startANRWatchdog()
         }
         
-        Log.d(TAG, "RhythmApplication initialization complete")
+        Log.d(TAG, "VYBE Application initialization complete")
         
         // Trim caches on startup so storage stays within the user's chosen limit
         // even if the app was force-stopped (onDestroy trim never ran). Gated to

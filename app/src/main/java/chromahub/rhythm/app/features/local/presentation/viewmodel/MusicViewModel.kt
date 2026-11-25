@@ -573,6 +573,108 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    // VYBE API-driven music catalog & decoupled user library repositories
+    private val vybeApiConfig = chromahub.rhythm.app.vybe.di.VybeServiceLocator.provideApiConfig(application)
+    private val vybeRepository = chromahub.rhythm.app.vybe.di.VybeServiceLocator.provideMusicRepository(application)
+    private val userLibraryRepository = chromahub.rhythm.app.vybe.di.VybeServiceLocator.provideUserLibraryRepository(application)
+
+    val activeProviderInfo: StateFlow<chromahub.rhythm.app.vybe.data.provider.ProviderInfo> =
+        vybeRepository.activeProviderInfo
+    val vybeCustomApiBaseUrl: StateFlow<String> = vybeApiConfig.customApiBaseUrl
+
+    private val _vybeHomeData = MutableStateFlow<chromahub.rhythm.app.vybe.domain.model.VybeHomeData?>(null)
+    val vybeHomeData: StateFlow<chromahub.rhythm.app.vybe.domain.model.VybeHomeData?> = _vybeHomeData.asStateFlow()
+
+    private val _isLoadingCatalog = MutableStateFlow(false)
+    val isLoadingCatalog: StateFlow<Boolean> = _isLoadingCatalog.asStateFlow()
+
+    private val _catalogError = MutableStateFlow<String?>(null)
+    val catalogError: StateFlow<String?> = _catalogError.asStateFlow()
+
+    private val _vybeSearchResults = MutableStateFlow<chromahub.rhythm.app.vybe.domain.model.VybeSearchResult?>(null)
+    val vybeSearchResults: StateFlow<chromahub.rhythm.app.vybe.domain.model.VybeSearchResult?> = _vybeSearchResults.asStateFlow()
+
+    private val _isSearchingCatalog = MutableStateFlow(false)
+    val isSearchingCatalog: StateFlow<Boolean> = _isSearchingCatalog.asStateFlow()
+
+    private val _searchCatalogError = MutableStateFlow<String?>(null)
+    val searchCatalogError: StateFlow<String?> = _searchCatalogError.asStateFlow()
+
+    private var catalogSearchJob: Job? = null
+
+    fun getAvailableMusicProviders(): List<chromahub.rhythm.app.vybe.data.provider.ProviderInfo> =
+        vybeRepository.availableProviders()
+
+    fun searchCatalog(query: String) {
+        val trimmed = query.trim()
+        catalogSearchJob?.cancel()
+        if (trimmed.isEmpty()) {
+            _vybeSearchResults.value = null
+            _isSearchingCatalog.value = false
+            _searchCatalogError.value = null
+            return
+        }
+        catalogSearchJob = viewModelScope.launch {
+            _isSearchingCatalog.value = true
+            _searchCatalogError.value = null
+            try {
+                when (val result = vybeRepository.search(trimmed)) {
+                    is chromahub.rhythm.app.vybe.domain.model.VybeResult.Success -> {
+                        _vybeSearchResults.value = result.data
+                    }
+                    is chromahub.rhythm.app.vybe.domain.model.VybeResult.Error -> {
+                        _searchCatalogError.value = result.message
+                    }
+                }
+            } finally {
+                _isSearchingCatalog.value = false
+            }
+        }
+    }
+
+    fun clearCatalogSearch() {
+        catalogSearchJob?.cancel()
+        _vybeSearchResults.value = null
+        _isSearchingCatalog.value = false
+        _searchCatalogError.value = null
+    }
+
+    fun retryLoadCatalog() {
+        refreshLibrary(showMediaScanLoader = false)
+    }
+
+    fun switchMusicProvider(providerId: String, customBaseUrl: String? = null) {
+        if (customBaseUrl != null) {
+            vybeApiConfig.setCustomApiBaseUrl(customBaseUrl)
+        }
+        vybeRepository.switchProvider(providerId)
+        clearCatalogSearch()
+        refreshLibrary(showMediaScanLoader = false)
+    }
+
+    fun resetMusicProviderDefaults() {
+        vybeApiConfig.resetToBuildDefaults()
+        vybeRepository.switchProvider(vybeApiConfig.defaultProviderId)
+        clearCatalogSearch()
+        refreshLibrary(showMediaScanLoader = false)
+    }
+
+    private fun hasValidStreamUri(song: Song): Boolean {
+        val raw = song.uri.toString().trim()
+        if (raw.isBlank()) return false
+        return raw.startsWith("http://", ignoreCase = true) ||
+            raw.startsWith("https://", ignoreCase = true) ||
+            raw.startsWith("vybe://", ignoreCase = true) ||
+            raw.startsWith("streaming://", ignoreCase = true)
+    }
+
+    private fun showStreamUnavailableError(song: Song) {
+        val context = getApplication<Application>()
+        _corruptedTrackName.value = song.title.ifBlank { context.getString(R.string.vybe_stream_unavailable_title) }
+        _corruptedTrackMessage.value = context.getString(R.string.vybe_stream_unavailable_message)
+        _showCorruptionDialog.value = true
+    }
+
     // Main music data
     private val _songs = MutableStateFlow<List<Song>>(emptyList())
     val songs: StateFlow<List<Song>> = _songs.asStateFlow()
@@ -1611,48 +1713,83 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private data class InitializationResult(val success: Boolean, val error: String? = null)
     
     /**
-     * Load core data efficiently. Songs are loaded first as they populate the 
-     * Room database relationships required for Albums and Artists on a cold start.
+     * Load core catalog data from the active VYBE [MusicProvider] via [VybeMusicRepository]
+     * and hydrate user library preferences (favorites, recently played, curated + user playlists).
+     * Local device MediaStore scanning is completely removed.
      */
     private suspend fun initializeCoreDataParallel(): InitializationResult {
+        return loadVybeCatalogInternal(forceRefresh = false)
+    }
+
+    private suspend fun loadVybeCatalogInternal(forceRefresh: Boolean): InitializationResult {
+        _isLoadingCatalog.value = true
+        _catalogError.value = null
         return try {
-            // 1. Load songs first. This takes the longest on cold start as it scans
-            // MediaStore and populates the Room database.
-            val songs = repository.loadSongs(
-                allowedFormats = allowedFormats.value,
-                minimumBitrate = minimumBitrate.value,
-                minimumDuration = minimumDuration.value
-            )
-            
-            // 2. Load albums and artists concurrently, now that the Room database 
-            // has been populated by the songs load.
-            val albumsDeferred = viewModelScope.async(Dispatchers.IO) {
-                repository.loadAlbums()
+            when (val snapshotResult = vybeRepository.getCatalogSnapshot(forceRefresh = forceRefresh)) {
+                is chromahub.rhythm.app.vybe.domain.model.VybeResult.Success -> {
+                    val snapshot = snapshotResult.data
+                    val mappedSongs = with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                        snapshot.tracks.map { it.toSong() }
+                    }
+                    val mappedAlbums = with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                        snapshot.albums.map { it.toAlbum() }
+                    }
+                    val mappedArtists = with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                        snapshot.artists.map { it.toArtist() }
+                    }
+                    val curatedPlaylists = with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                        snapshot.playlists.map { it.toPlaylist() }
+                    }
+                    val userPlaylists = with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                        userLibraryRepository.userPlaylists.value.map { it.toPlaylist() }
+                    }
+
+                    // Merge favorites from decoupled UserLibraryRepository
+                    val savedFavs = userLibraryRepository.favoriteTrackIds.value
+                    if (savedFavs.isNotEmpty()) {
+                        _favoriteSongs.value = _favoriteSongs.value + savedFavs
+                    }
+
+                    // Hydrate recently played from UserLibraryRepository if empty
+                    val savedRecent = with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                        userLibraryRepository.recentlyPlayedTracks.value.map { it.toSong() }
+                    }
+                    if (_recentlyPlayed.value.isEmpty() && savedRecent.isNotEmpty()) {
+                        _recentlyPlayed.value = savedRecent
+                    }
+
+                    _vybeHomeData.value = snapshot.home
+                    _songs.value = mappedSongs
+                    _albums.value = mappedAlbums
+                    _artists.value = mappedArtists
+                    _folderTree.value = null
+
+                    // Merge curated provider playlists alongside existing user playlists without duplicating IDs
+                    val existingNonCurated = _playlists.value.filter { existing ->
+                        curatedPlaylists.none { it.id == existing.id } &&
+                            userPlaylists.none { it.id == existing.id }
+                    }
+                    _playlists.value = (existingNonCurated + userPlaylists + curatedPlaylists).distinctBy { it.id }
+
+                    Log.d(
+                        TAG,
+                        "Loaded VYBE catalog (${snapshot.providerId}): ${mappedSongs.size} tracks, ${mappedAlbums.size} albums, ${mappedArtists.size} artists, ${curatedPlaylists.size} curated playlists"
+                    )
+                    InitializationResult(true)
+                }
+                is chromahub.rhythm.app.vybe.domain.model.VybeResult.Error -> {
+                    Log.w(TAG, "VYBE catalog load failed: ${snapshotResult.message}")
+                    _catalogError.value = snapshotResult.message
+                    // Do not block app startup on network/API failure — UI shows retry state cleanly
+                    InitializationResult(true, snapshotResult.message)
+                }
             }
-            val artistsDeferred = viewModelScope.async(Dispatchers.IO) {
-                repository.loadArtists()
-            }
-            
-            // Await all results
-            val albums = albumsDeferred.await()
-            val artists = artistsDeferred.await()
-            
-            if (songs.isEmpty() && albums.isEmpty() && artists.isEmpty()) {
-                Log.w(TAG, "No media found, but this might be normal on first run")
-            }
-            
-            // Update state atomically
-            _songs.value = songs
-            _albums.value = albums
-            _artists.value = artists
-            viewModelScope.launch(Dispatchers.IO) {
-                _folderTree.value = repository.buildFolderTree(songs)
-            }
-            
-            InitializationResult(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Error loading core data", e)
-            InitializationResult(false, e.message)
+            Log.e(TAG, "Error loading VYBE catalog", e)
+            _catalogError.value = e.message ?: "Unable to load music catalog"
+            InitializationResult(true, e.message)
+        } finally {
+            _isLoadingCatalog.value = false
         }
     }
     
@@ -1956,208 +2093,19 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
     
     /**
-     * Start background tasks with appropriate delays to allow UI to settle first.
-     * This is called AFTER _isInitialized is set to true, so UI is already responsive.
+     * Start lightweight background tasks for VYBE streaming after UI settles.
+     * Local MediaStore observers, file scanning, and embedded tag/artwork extractors are removed.
      */
     private fun startBackgroundTasksDeferred() {
-        armLibrarySetupCompletionNotification()
+        _isGenreDetectionComplete.value = true
+        _isExtractingMetadata.value = false
+        _isFetchingArtwork.value = false
 
-        // Note: The redundant full MediaStore sync on startup has been removed.
-        // It used to call loadSongs(forceRefresh=true) 500ms after app launch,
-        // causing severe UI lag and DB writes.
-        // We now rely on the MediaStoreObserver to detect actual changes and trigger updates.
-
-        // Start listening time tracking (lightweight, can start immediately)
         viewModelScope.launch {
             try {
                 startListeningTimeTracking()
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting listening time tracking", e)
-            }
-        }
-        
-        // Startup staleness check: If MediaStore has changes, run background differential sync
-        viewModelScope.launch(Dispatchers.IO) {
-            delay(1200) // Allow UI transition to complete smoothly
-            try {
-                val lastScan = appSettings.lastScanTimestamp.value
-                val cachedCount = _songs.value.size
-                if (cachedCount == 0 || repository.isLibraryStale(lastScan, cachedCount)) {
-                    Log.d(TAG, "Library is empty or stale on startup (count=$cachedCount), triggering background refresh")
-                    performMediaStoreRefresh()
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error during startup staleness check", e)
-            }
-        }
-        
-        // Register ContentObserver for automatic MediaStore updates
-        // Use a full refresh instead of incremental scan to detect removed/re-added songs.
-        // Cancel any pending refresh job before scheduling a new one (debounce pattern).
-        mediaStoreObserverRegisteredTimeMs = SystemClock.elapsedRealtime()
-        repository.registerMediaStoreObserver {
-            val timeSinceRegistration = SystemClock.elapsedRealtime() - mediaStoreObserverRegisteredTimeMs
-            if (timeSinceRegistration < 5000) {
-                Log.d(TAG, "Ignoring false-positive startup MediaStore observer callback ($timeSinceRegistration ms since registration)")
-                return@registerMediaStoreObserver
-            }
-            Log.d(TAG, "MediaStore changed, scheduling debounce check for refresh")
-            mediaStoreRefreshJob?.cancel()
-            mediaStoreRefreshJob = viewModelScope.launch {
-                delay(2000) // Debounce window
-                val lastScan = appSettings.lastScanTimestamp.value
-                val cachedCount = _songs.value.size
-                if (repository.isLibraryStale(lastScan, cachedCount)) {
-                    Log.d(TAG, "MediaStore changed and library is stale. Performing full refresh.")
-                    performMediaStoreRefresh()
-                } else {
-                    Log.d(TAG, "MediaStore callback received, but library is up-to-date. Skipping refresh.")
-                }
-            }
-        }
-        
-        // Start artwork fetching in background after a delay
-        viewModelScope.launch {
-            delay(1500) // Wait 1.5 seconds for UI to fully settle
-            try {
-                val context = getApplication<Application>()
-                val hasMissingArtists = _artists.value.any { it.artworkUri == null }
-                val hasMissingAlbums = _albums.value.any { it.artworkUri == null }
-                val hasMissingSongs = _songs.value.any { it.artworkUri == null }
-                
-                val artistSource1 = appSettings.artistArtworkSource.value
-                val isArtistRemoteAllowed1 = (artistSource1 == chromahub.rhythm.app.shared.data.model.ArtistArtworkSource.PREFER_LOCAL_THEN_API ||
-                    artistSource1 == chromahub.rhythm.app.shared.data.model.ArtistArtworkSource.API_ONLY) &&
-                    (artistSource1 != chromahub.rhythm.app.shared.data.model.ArtistArtworkSource.API_ONLY || appSettings.deezerApiEnabled.value)
-                val shouldFetchArtists = hasMissingArtists && isArtistRemoteAllowed1
-                val shouldFetchAlbumsAndSongs = (hasMissingAlbums || hasMissingSongs) && appSettings.isAutoFetchArtworkActive.value && (appSettings.ytMusicApiEnabled.value || appSettings.deezerApiEnabled.value)
-
-                val isMeteredOrRestricted = chromahub.rhythm.app.core.utils.NetworkUtils.isBackgroundDataRestricted(context)
-                if (!isMeteredOrRestricted && (shouldFetchArtists || shouldFetchAlbumsAndSongs)) {
-                    _isFetchingArtwork.value = true
-                    fetchArtworkFromInternet(
-                        fetchArtists = shouldFetchArtists,
-                        fetchAlbumsAndSongs = shouldFetchAlbumsAndSongs
-                    )
-                } else {
-                    Log.d(TAG, "Startup internet artwork fetch skipped (restricted=$isMeteredOrRestricted, fetchArtists=$shouldFetchArtists, fetchAlbums=$shouldFetchAlbumsAndSongs)")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error fetching artwork from internet", e)
-            } finally {
-                _isFetchingArtwork.value = false
-            }
-        }
-
-        // Start background genre detection after a longer delay
-        viewModelScope.launch {
-            delay(3000) // Wait 3 seconds after app load before starting genre detection
-            try {
-                if (!appSettings.genreDetectionCompleted.value) {
-                    Log.d(TAG, "Starting genre detection (completed: ${appSettings.genreDetectionCompleted.value})")
-                    detectGenresInBackground()
-                } else {
-                    Log.d(TAG, "Genre detection already completed, skipping")
-                    _isGenreDetectionComplete.value = true
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting background genre detection", e)
-                // Mark as complete on error to prevent infinite loading
-                _isGenreDetectionComplete.value = true
-            }
-        }
-        
-        // Start background audio metadata extraction after an even longer delay
-        viewModelScope.launch {
-            delay(5000) // Wait 5 seconds after app load before starting metadata extraction
-            try {
-                val songsWithMetadata = songs.value.count {
-                    it.bitrate != null && it.sampleRate != null && it.channels != null && it.codec != null
-                }
-                val hasMissingMetadata = songsWithMetadata < songs.value.size
-
-                if (!appSettings.audioMetadataExtractionCompleted.value || hasMissingMetadata) {
-                    _isExtractingMetadata.value = true
-                    extractAudioMetadataInBackground()
-                } else {
-                    Log.d(TAG, "Audio metadata already extracted for current library, skipping startup pass")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting background audio metadata extraction", e)
-            } finally {
-                _isExtractingMetadata.value = false
-                }
-            }
-
-        // Extract embedded album art in background when preferSongArtwork is enabled.
-        // This runs after the UI is fully settled so it doesn't affect splash screen load time.
-        //
-        // KEY LOGIC: We only extract if there are songs with NO artwork at all (artworkUri == null).
-        // Songs that already have any artwork URI (including MediaStore content:// album art) are
-        // considered covered — extractEmbeddedArtworkForSongs() will skip them individually anyway.
-        // This prevents the extraction from running on every launch just because songs have
-        // non-embedded-cache artwork URIs (which used to incorrectly count as "missing").
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val preferSongArtwork = appSettings.preferSongArtwork.value
-                val losslessArtwork = appSettings.isLosslessArtworkActive.value
-                val isCompleted = appSettings.embeddedArtworkExtractionCompleted.value
-                val lastLosslessStatus = appSettings.embeddedArtworkExtractionLosslessStatus.value
-                // Self-heal: if extraction is complete but the cache was wiped outside the
-                // normal flow, re-run extraction once (gated to once per 24h to avoid loops).
-                // Missing art is otherwise restored by the rescan scheduled after "Clear all cache".
-                val songsExpectingEmbeddedArt = repository.countSongsWithEmbeddedArtworkUri()
-                val needsSelfHeal = isCompleted &&
-                    appSettings.shouldRunEmbeddedArtSelfHeal() &&
-                    repository.isEmbeddedArtworkCacheEmpty() &&
-                    songsExpectingEmbeddedArt > 0
-
-                val needsRun = !isCompleted || lastLosslessStatus != losslessArtwork || needsSelfHeal
-
-                if (preferSongArtwork && needsSelfHeal) {
-                    Log.d(TAG, "Embedded artwork cache empty with $songsExpectingEmbeddedArt songs referencing it, running one-time self-heal re-extraction")
-                    appSettings.markEmbeddedArtSelfHealDone()
-                }
-
-                if (preferSongArtwork && needsRun) {
-                    val initialSongs = _songs.value
-                    val songsNeedingExtraction = initialSongs.count { song ->
-                        song.artworkUri == null ||
-                        !repository.isEmbeddedArtworkCacheUri(song.artworkUri) ||
-                        !repository.hasArtworkMatchingLossless(song, losslessArtwork)
-                    }
-
-                    if (songsNeedingExtraction == 0) {
-                        Log.d(TAG, "All ${initialSongs.size} songs already have cached embedded artwork, skipping extraction")
-                        appSettings.setEmbeddedArtworkExtractionLosslessStatus(losslessArtwork)
-                        appSettings.setEmbeddedArtworkExtractionCompleted(true)
-                        return@launch
-                    }
-
-                    Log.d(TAG, "$songsNeedingExtraction/${initialSongs.size} songs need embedded artwork extraction, starting after delay")
-                    delay(1500L) // Allow UI to fully settle before heavy IO
-
-                    Log.d(TAG, "Starting background embedded album art extraction (preferSongArtwork=$preferSongArtwork, lossless=$losslessArtwork)")
-                    val currentSongs = _songs.value
-                    if (currentSongs.isNotEmpty()) {
-                        val updatedSongs = repository.extractEmbeddedArtworkForSongs(currentSongs, losslessArtwork)
-                        repository.updateAndPersistSongs(updatedSongs)
-                        val freshAlbums = repository.loadAlbums()
-                        val freshArtists = repository.loadArtists()
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                            _songs.value = updatedSongs
-                            _albums.value = freshAlbums
-                            _artists.value = freshArtists
-                        }
-                        appSettings.setEmbeddedArtworkExtractionLosslessStatus(losslessArtwork)
-                        appSettings.setEmbeddedArtworkExtractionCompleted(true)
-                        Log.d(TAG, "Background embedded art extraction complete for ${currentSongs.size} songs")
-                    }
-                } else {
-                    Log.d(TAG, "Embedded artwork extraction already completed or disabled (preferSongArtwork=$preferSongArtwork, completed=$isCompleted, statusMatched=${lastLosslessStatus == losslessArtwork}), skipping")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error during background embedded art extraction", e)
             }
         }
     }
@@ -2482,236 +2430,31 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /**
-     * Triggers a refresh of all music data by rescanning the device's MediaStore.
-     * This will update the songs, albums, and artists in the ViewModel.
+     * Refreshes the music catalog from the active VYBE [MusicProvider] via [VybeMusicRepository].
      */
     fun refreshLibrary(showMediaScanLoader: Boolean = true) {
-        mediaScanNotificationSequence += 1
-        val notificationSequence = mediaScanNotificationSequence
-        armLibrarySetupCompletionNotification()
-
-        // Cancel any existing scan
         scanJob?.cancel()
-        
+
         scanJob = viewModelScope.launch {
-            Log.d(TAG, "Starting library refresh...")
-            val previousSongCount = _songs.value.size
-            var refreshCompletedSuccessfully = false
-            var refreshCancelled = false
-
-            _isMediaScanning.value = showMediaScanLoader // Only show full-screen loader when requested
-            _isLibraryRefreshing.value = true // Always set for pull-to-refresh tracking
-            if (showMediaScanLoader) {
-                // Only a full-screen scan should hide the app behind the initialization
-                // loader; pull-to-refresh and background rescans keep the app visible.
-                _isInitialized.value = false
-            }
-            _isGenreDetectionComplete.value = false // Reset genre detection state
-            appSettings.setEmbeddedArtworkExtractionCompleted(false)
-            // Don't reset _isGenreDetectionRunning to allow proper concurrency check
-
-            startMediaScanProgressNotifications(notificationSequence)
-            
-            val startTime = System.currentTimeMillis()
+            Log.d(TAG, "Refreshing VYBE catalog from active MusicProvider...")
+            _isLibraryRefreshing.value = true
+            _isMediaScanning.value = false
 
             try {
-                // Trigger the refresh in the repository and get the fresh data directly
-                // to avoid resolving entire media store twice
-                val (freshSongs, freshAlbums, freshArtists) = repository.refreshMusicData(
-                    allowedFormats = allowedFormats.value,
-                    minimumBitrate = minimumBitrate.value,
-                    minimumDuration = minimumDuration.value
-                )
-
-                // Update StateFlows with the fresh data
-                _songs.value = freshSongs
-                _albums.value = freshAlbums
-                _artists.value = freshArtists
-
-                // Re-populate dynamic playlists (if enabled)
+                loadVybeCatalogInternal(forceRefresh = true)
                 if (appSettings.defaultPlaylistsEnabled.value) {
                     populateDefaultPlaylistsSafely()
                 }
-                
-                // Always preserve unresolved/missing playlist entries during library refreshes so that
-                // adding new songs to music folders or asynchronous filter updates never prunes playlist tracks.
                 refreshPlaylists(preserveMissingSongs = true)
-
-                // Re-fetch artwork from internet for newly added/updated items (but don't block completion)
-                launch { 
-                    try {
-                        val context = getApplication<Application>()
-                        val hasMissingArtists = _artists.value.any { it.artworkUri == null }
-                        val hasMissingAlbums = withContext(Dispatchers.IO) {
-                            _albums.value.any { album ->
-                                val uri = album.artworkUri
-                                uri == null || (uri.toString().startsWith("content://media/external/audio/albumart") && !isContentUriReadable(context, uri))
-                            }
-                        }
-                        val hasMissingSongs = _songs.value.any { it.artworkUri == null }
-                        
-                        val artistSource3 = appSettings.artistArtworkSource.value
-                        val isArtistRemoteAllowed3 = (artistSource3 == chromahub.rhythm.app.shared.data.model.ArtistArtworkSource.PREFER_LOCAL_THEN_API ||
-                            artistSource3 == chromahub.rhythm.app.shared.data.model.ArtistArtworkSource.API_ONLY) &&
-                            (artistSource3 != chromahub.rhythm.app.shared.data.model.ArtistArtworkSource.API_ONLY || appSettings.deezerApiEnabled.value)
-                        val shouldFetchArtists = hasMissingArtists && isArtistRemoteAllowed3
-                        val shouldFetchAlbumsAndSongs = (hasMissingAlbums || hasMissingSongs) && appSettings.isAutoFetchArtworkActive.value && (appSettings.ytMusicApiEnabled.value || appSettings.deezerApiEnabled.value)
-
-                        val isMeteredOrRestricted = chromahub.rhythm.app.core.utils.NetworkUtils.isBackgroundDataRestricted(context)
-                        if (!isMeteredOrRestricted && (shouldFetchArtists || shouldFetchAlbumsAndSongs)) {
-                            _isFetchingArtwork.value = true
-                            fetchArtworkFromInternet(
-                                fetchArtists = shouldFetchArtists,
-                                fetchAlbumsAndSongs = shouldFetchAlbumsAndSongs
-                            )
-                        } else {
-                            Log.d(TAG, "Library rescan artwork fetch skipped (restricted=$isMeteredOrRestricted, fetchArtists=$shouldFetchArtists, fetchAlbums=$shouldFetchAlbumsAndSongs)")
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Artwork fetching failed but continuing with library refresh", e)
-                    } finally {
-                        _isFetchingArtwork.value = false
-                    }
-                }
-                
-                // Note: Genre detection is handled by the initial load, no need to restart here
-                
-                // Restart background audio metadata extraction
-                launch {
-                    _isExtractingMetadata.value = true
-                    try {
-                        delay(3000) // Wait 3 seconds before starting metadata extraction
-                        extractAudioMetadataInBackground()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error restarting background audio metadata extraction", e)
-                    } finally {
-                        _isExtractingMetadata.value = false
-                    }
-                }
-
-                // Trigger background embedded album art extraction for new/updated songs
-                if (appSettings.preferSongArtwork.value) {
-                    launch(Dispatchers.IO) {
-                        try {
-                            delay(1200)
-                            val currentSongs = _songs.value
-                            val losslessArtwork = appSettings.isLosslessArtworkActive.value
-                            val songsNeedingExtraction = currentSongs.count { song ->
-                                song.artworkUri == null ||
-                                !repository.isEmbeddedArtworkCacheUri(song.artworkUri) ||
-                                !repository.hasArtworkMatchingLossless(song, losslessArtwork)
-                            }
-                            if (songsNeedingExtraction > 0) {
-                                Log.d(TAG, "Starting post-refresh background embedded artwork extraction for $songsNeedingExtraction songs")
-                                val updatedSongs = repository.extractEmbeddedArtworkForSongs(currentSongs, losslessArtwork)
-                                repository.updateAndPersistSongs(updatedSongs)
-                                val freshAlbums = repository.loadAlbums()
-                                val freshArtists = repository.loadArtists()
-                                withContext(Dispatchers.Main) {
-                                    _songs.value = updatedSongs
-                                    _albums.value = freshAlbums
-                                    _artists.value = freshArtists
-                                }
-                                appSettings.setEmbeddedArtworkExtractionLosslessStatus(losslessArtwork)
-                                appSettings.setEmbeddedArtworkExtractionCompleted(true)
-                            }
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Error in post-refresh embedded artwork extraction", e)
-                        }
-                    }
-                }
-
-                val duration = System.currentTimeMillis() - startTime
-                appSettings.setLastScanTimestamp(System.currentTimeMillis())
-                appSettings.setLastScanDuration(duration)
-                
-                Log.d(TAG, "Library refresh complete. Loaded ${_songs.value.size} songs, ${_albums.value.size} albums, ${_artists.value.size} artists in ${duration}ms")
-                refreshCompletedSuccessfully = true
             } catch (e: kotlinx.coroutines.CancellationException) {
-                Log.d(TAG, "Library refresh cancelled by user")
-                refreshCancelled = true
-                throw e // Re-throw to allow proper cancellation
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Error during library refresh", e)
-                // Ensure we still have some data even if refresh fails
-                if (_songs.value.isEmpty()) {
-                    try {
-                        _songs.value = repository.loadSongs(
-                            forceRefresh = true,
-                            allowedFormats = allowedFormats.value,
-                            minimumBitrate = minimumBitrate.value,
-                            minimumDuration = minimumDuration.value
-                        )
-                        _albums.value = repository.loadAlbums()
-                        _artists.value = repository.loadArtists()
-                    } catch (fallbackError: Exception) {
-                        Log.e(TAG, "Fallback loading also failed", fallbackError)
-                    }
-                }
+                Log.e(TAG, "Error refreshing VYBE catalog", e)
+                _catalogError.value = e.message ?: "Unable to refresh music catalog"
             } finally {
-                stopMediaScanProgressNotifications()
-                _isInitialized.value = true // Mark as initialized again
-                _isMediaScanning.value = false // Hide media scan loader
-                _isLibraryRefreshing.value = false // Reset pull-to-refresh state
-                
-                // Process pending restore if queued
-                val queued = pendingRestore
-                if (queued != null) {
-                    pendingRestore = null
-                    Log.d(TAG, "Executing queued restore operation...")
-                    val success = repository.backupRestoreManager.restoreFromBackupPayload(queued.backupJson, queued.sections)
-                    if (success) {
-                        reloadPlaylistsFromSettings()
-                    }
-                    queued.onResult(success)
-                }
-                
-                // Ensure MediaScanLoader doesn't get stuck by dispatching a completion event
-                // This is a safety measure for cases where the StateFlow updates might not trigger UI properly
-                try {
-                    delay(1000) // Give UI time to process the state changes
-                } catch (_: kotlinx.coroutines.CancellationException) {
-                    // Keep cleanup deterministic even when the refresh coroutine is cancelled.
-                }
-                Log.d(TAG, "Media scanning state cleared - final state: ${_songs.value.size} songs, ${_albums.value.size} albums, ${_artists.value.size} artists")
-
-                if (!refreshCompletedSuccessfully) {
-                    disarmLibrarySetupCompletionNotification()
-                }
-
-                if (notificationSequence == mediaScanNotificationSequence) {
-                    val context = getApplication<Application>()
-                    when {
-                        refreshCompletedSuccessfully -> {
-                            showOperationResultNotification(
-                                notificationId = MEDIA_SCAN_NOTIFICATION_ID,
-                                title = context.getString(R.string.notification_media_scan_title),
-                                content = context.getString(R.string.notification_media_scan_complete_pending_setup),
-                                isError = false
-                            )
-                        }
-
-                        refreshCancelled -> {
-                            showOperationResultNotification(
-                                notificationId = MEDIA_SCAN_NOTIFICATION_ID,
-                                title = context.getString(R.string.notification_media_scan_title),
-                                content = context.getString(R.string.notification_media_scan_cancelled),
-                                isError = false,
-                                autoDismissMs = 3000L
-                            )
-                        }
-
-                        else -> {
-                            showOperationResultNotification(
-                                notificationId = MEDIA_SCAN_NOTIFICATION_ID,
-                                title = context.getString(R.string.notification_media_scan_title),
-                                content = context.getString(R.string.notification_media_scan_failed),
-                                isError = true,
-                                autoDismissMs = 8000L
-                            )
-                        }
-                    }
-                }
+                _isInitialized.value = true
+                _isMediaScanning.value = false
+                _isLibraryRefreshing.value = false
             }
         }
     }
@@ -5226,6 +4969,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun playSong(song: Song) {
         Log.d(TAG, "Playing song: ${song.title}")
 
+        if (!hasValidStreamUri(song)) {
+            Log.w(TAG, "Track '${song.title}' has no playable stream URL")
+            showStreamUnavailableError(song)
+            return
+        }
+
         if (!canStartPlayback("playSong")) {
             return
         }
@@ -5718,6 +5467,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 appSettings.updateRecentlyPlayed(currentList.map { it.id })
                 appSettings.updateRecentlyPlayedSongCache(currentList)
                 appSettings.updateLastPlayedTimestamp(System.currentTimeMillis())
+                with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+                    userLibraryRepository.recordRecentlyPlayed(
+                        song.toVybeTrack(activeProviderInfo.value.providerId)
+                    )
+                }
                 
                 // Log the update
                 Log.d(TAG, "Updated recently played: ${currentList.size} songs, latest: ${song.title}")
@@ -6080,9 +5834,15 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             Log.e(TAG, "Cannot play empty queue")
             return
         }
-        
-        // Validate startIndex
+
+        // Validate startIndex and guard against unplayable stream URLs
         val validStartIndex = startIndex.coerceIn(0, songs.size - 1)
+        val requestedStartSong = songs[validStartIndex]
+        if (!hasValidStreamUri(requestedStartSong)) {
+            Log.w(TAG, "Selected queue track '${requestedStartSong.title}' has no playable stream URL")
+            showStreamUnavailableError(requestedStartSong)
+            return
+        }
         if (startIndex != validStartIndex) {
             Log.w(TAG, "startIndex $startIndex out of bounds, using $validStartIndex")
         }
@@ -6887,6 +6647,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         
         _favoriteSongs.value = currentFavorites
         saveFavoriteSongs()
+        with(chromahub.rhythm.app.vybe.data.mapper.VybeModelMapper) {
+            userLibraryRepository.setFavorite(
+                song.toVybeTrack(activeProviderInfo.value.providerId),
+                currentFavorites.contains(songId)
+            )
+        }
         
         // Notify MediaPlaybackService about favorite state change
         notifyMediaServiceFavoriteChange()
@@ -8298,14 +8064,27 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val fetchingSongId = song.id
                 Log.d(TAG, "Fetching lyrics for: ${song.artist} - ${song.title} (ID: $fetchingSongId) using preference: $lyricsPreference, forceRefresh: $forceRefresh")
                 
-                val lyricsData = repository.fetchLyrics(
-                    artist = song.artist, 
-                    title = song.title, 
-                    songId = song.id,
-                    songUri = song.uri,
-                    sourcePreference = lyricsPreference,
-                    forceRefresh = forceRefresh
-                )
+                // 1. Query active VYBE MusicProvider for lyrics first (if provider supports LYRICS)
+                val providerLyricsResult = vybeRepository.getLyrics(fetchingSongId)
+                val providerLyrics = (providerLyricsResult as? chromahub.rhythm.app.vybe.domain.model.VybeResult.Success)?.data
+                val lyricsData = if (providerLyrics != null &&
+                    (!providerLyrics.syncedLyrics.isNullOrBlank() || !providerLyrics.plainLyrics.isNullOrBlank())
+                ) {
+                    LyricsData(
+                        plainLyrics = providerLyrics.plainLyrics,
+                        syncedLyrics = providerLyrics.syncedLyrics,
+                        source = providerLyrics.source
+                    )
+                } else {
+                    repository.fetchLyrics(
+                        artist = song.artist,
+                        title = song.title,
+                        songId = song.id,
+                        songUri = song.uri,
+                        sourcePreference = lyricsPreference,
+                        forceRefresh = forceRefresh
+                    )
+                }
                 
                 // Verify the song hasn't changed before updating lyrics
                 if (currentSong.value?.id == fetchingSongId && isActive) {

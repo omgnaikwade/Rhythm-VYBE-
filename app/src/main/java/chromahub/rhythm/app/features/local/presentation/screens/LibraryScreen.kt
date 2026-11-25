@@ -372,10 +372,10 @@ fun LibraryScreen(
         if (isStreamingMode) hiddenTabs - "ALBUM_ARTISTS" else hiddenTabs
     }
     
-    val allowedStreamingTabs = setOf("SONGS", "LIKED", "PLAYLISTS", "ALBUMS", "ARTISTS", "ALBUM_ARTISTS")
+    val allowedVybeTabs = setOf("SONGS", "LIKED", "PLAYLISTS", "ALBUMS", "ARTISTS", "ALBUM_ARTISTS")
     val tabs = remember(tabOrder, effectiveHiddenTabs, isStreamingMode) {
         tabOrder
-            .filter { !effectiveHiddenTabs.contains(it) && (!isStreamingMode || it in allowedStreamingTabs) }
+            .filter { !effectiveHiddenTabs.contains(it) && it in allowedVybeTabs }
             .map { tabId ->
                 when (tabId) {
                     "SONGS" -> context.getString(R.string.settings_tab_songs)
@@ -385,7 +385,6 @@ fun LibraryScreen(
                     "ARTISTS" -> context.getString(R.string.settings_tab_artists)
                     "ALBUM_ARTISTS" -> context.getString(R.string.settings_tab_album_artists)
                     "DATES" -> context.getString(R.string.settings_tab_dates)
-                    "EXPLORER" -> context.getString(R.string.settings_tab_explorer)
                     else -> tabId
                 }
             }
@@ -393,7 +392,7 @@ fun LibraryScreen(
     
     val visibleTabIds = remember(tabOrder, effectiveHiddenTabs, isStreamingMode) {
         tabOrder.filter {
-            !effectiveHiddenTabs.contains(it) && (!isStreamingMode || it in allowedStreamingTabs)
+            !effectiveHiddenTabs.contains(it) && it in allowedVybeTabs
         }
     }
     

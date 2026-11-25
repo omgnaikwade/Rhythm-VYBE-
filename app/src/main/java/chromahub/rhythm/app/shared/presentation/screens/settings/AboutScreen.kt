@@ -247,14 +247,14 @@ fun AboutScreen(
                         }
 
                         Text(
-                            text = context.getString(R.string.settings_about_music_player),
+                            text = "API-Driven Music Streaming Player",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
                         Text(
-                            text = stringResource(R.string.onboarding_welcome_subtitle),
-                            style = MaterialTheme.typography.bodyMedium,
+                            text = "Application ID: ${BuildConfig.APPLICATION_ID}",
+                            style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             textAlign = TextAlign.Center
                         )
@@ -348,9 +348,13 @@ fun AboutScreen(
                         value = context.getString(R.string.about_copy_system_info_desc),
                         shape = RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = 20.dp, bottomEnd = 20.dp),
                         onClick = {
+                            val activeProviderId = chromahub.rhythm.app.vybe.config.VybeApiConfig
+                                .getInstance(context).activeProviderId.value
                             val allInfo = buildString {
-                                appendLine("=== Rhythm System Information ===")
-                                appendLine("App: Rhythm")
+                                appendLine("=== VYBE System Information ===")
+                                appendLine("App: VYBE")
+                                appendLine("Application ID: ${BuildConfig.APPLICATION_ID}")
+                                appendLine("Active Music Provider: $activeProviderId")
                                 appendLine("Version: ${BuildConfig.VERSION_NAME}")
                                 appendLine("Build: ${BuildConfig.VERSION_CODE} ($buildVariant)")
                                 appendLine("Target SDK: ${appInfo.targetSdkVersion}")
@@ -370,125 +374,31 @@ fun AboutScreen(
             }
 
             item {
-                Text(
-                    text = context.getString(R.string.settings_about_credits),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(bottom = 8.dp, top = 18.dp)
-                )
-
-                DeveloperCard(
-                    name = "Anjishnu Nandi",
-                    githubUsername = "cromaguy",
-                    avatarUrl = "https://github.com/cromaguy.png",
-                    supportUrl = "https://ko-fi.com/anjishnunandi",
-                    teamTitle = context.getString(R.string.settings_about_team_chromahub),
-                    teamDescription = context.getString(R.string.settings_about_team_desc),
-                    openUrl = openUrl
-                )
+                Card(
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Open Source Notice & Upstream Attribution",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "VYBE is built on the open-source Rhythm Music Player foundation originally created by Anjishnu Nandi (ChromaHub) and contributors, and is distributed under the GNU General Public License v3.0 or later (GPL-3.0-or-later).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
-
-            item {
-                val maintainerItems = remember(context, haptics) {
-                    listOf(
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "Izzy",
-                            role = "Manages updates on IzzyOnDroid",
-                            githubUsername = "IzzySoft",
-                            avatarUrl = "https://github.com/IzzySoft.png"
-                        ),
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "linsui",
-                            role = "Manages updates on F-Droid",
-                            githubUsername = "linsui",
-                            avatarUrl = "https://github.com/linsui.png"
-                        ),
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "Licaon_Kter",
-                            role = "Manages updates on F-Droid",
-                            githubUsername = "licaon-kter",
-                            avatarUrl = "https://github.com/licaon-kter.png"
-                        )
-                    )
-                }
-                Material3SettingsGroup(
-                    title = context.getString(R.string.about_community_group_maintainers),
-                    items = maintainerItems,
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                val collaboratorItems = remember(context, haptics) {
-                    listOf(
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "theovilardo",
-                            role = "Guide & PixelPlayer's Lead Dev",
-                            githubUsername = "theovilardo",
-                            avatarUrl = "https://github.com/theovilardo.png"
-                        ),
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "Nick",
-                            role = "Guide & Gramophone's Maintainer",
-                            githubUsername = "nift4",
-                            avatarUrl = "https://github.com/nift4.png"
-                        ),
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "vivi",
-                            role = "Guide & Vivi Music's Lead Dev",
-                            githubUsername = "vivizzz007",
-                            avatarUrl = "https://github.com/vivizzz007.png"
-                        ),
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "Alex",
-                            role = "Lyrically API's Lead Dev",
-                            githubUsername = "Paxsenix0",
-                            avatarUrl = "https://github.com/Paxsenix0.png"
-                        )
-                    )
-                }
-                Material3SettingsGroup(
-                    title = context.getString(R.string.about_community_group_collaborators),
-                    items = collaboratorItems,
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                val designTestingItems = remember(context, haptics) {
-                    listOf(
-                        createCommunityMemberItem(
-                            context = context,
-                            haptics = haptics,
-                            name = "itzKane",
-                            role = "UI Concept Designer",
-                            githubUsername = "soykane",
-                            avatarUrl = "https://github.com/soykane.png"
-                        )
-                    )
-                }
-                Material3SettingsGroup(
-                    title = context.getString(R.string.about_community_group_design_testing),
-                    items = designTestingItems,
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer
-                )
-            }
-
-
 
             item {
                 val actionItems = listOf(
@@ -496,23 +406,10 @@ fun AboutScreen(
                         context = context,
                         hapticFeedback = haptics,
                         item = SettingItem(
-                            icon = RhythmIcons.Download,
-                            title = context.getString(R.string.settings_about_check_updates),
-                            description = context.getString(R.string.updates_check_again),
-                            onClick = {
-                                appUpdaterViewModel.checkForUpdates(force = true)
-                                onNavigateToUpdates?.invoke()
-                            }
-                        )
-                    ),
-                    toMaterial3SettingsItem(
-                        context = context,
-                        hapticFeedback = haptics,
-                        item = SettingItem(
-                            icon = RhythmIcons.BugReport,
-                            title = context.getString(R.string.settings_about_report_bug),
-                            description = "github.com/cromaguy/Rhythm/issues",
-                            onClick = { openUrl("https://github.com/cromaguy/Rhythm/issues") }
+                            icon = MaterialSymbolIcon("cloud_queue", filled = true),
+                            title = context.getString(R.string.settings_music_provider),
+                            description = context.getString(R.string.settings_music_provider_desc),
+                            onClick = { onNavigateTo?.invoke(SettingsRoutes.MUSIC_PROVIDER) }
                         )
                     ),
                     toMaterial3SettingsItem(
@@ -523,38 +420,6 @@ fun AboutScreen(
                             title = context.getString(R.string.settings_about_open_source_libs),
                             description = context.getString(R.string.settings_about_view_dependencies),
                             onClick = { showLicensesSheet = true }
-                        )
-                    ),
-                    toMaterial3SettingsItem(
-                        context = context,
-                        hapticFeedback = haptics,
-                        item = SettingItem(
-                            icon = MaterialSymbolIcon("chat", filled = true),
-                            title = stringResource(R.string.aboutscreen_discord_community),
-                            description = "discord.gg/XjPyUYPQYc",
-                            onClick = { openUrl("https://discord.gg/XjPyUYPQYc") }
-                        )
-                    ),
-                    toMaterial3SettingsItem(
-                        context = context,
-                        hapticFeedback = haptics,
-                        item = SettingItem(
-                            icon = MaterialSymbolIcon("send", filled = true),
-                            title = stringResource(R.string.cd_telegram_support),
-                            description = "t.me/RhythmSupport",
-                            onClick = { openUrl("https://t.me/RhythmSupport") }
-                        )
-                    ),
-                    toMaterial3SettingsItem(
-                        context = context,
-                        hapticFeedback = haptics,
-                        item = SettingItem(
-                            icon = MaterialSymbolIcon("restart_alt", filled = true),
-                            title = stringResource(R.string.about_replay_tour),
-                            description = stringResource(R.string.about_replay_tour_desc),
-                            onClick = {
-                                appSettings.setOnboardingCompleted(false)
-                            }
                         )
                     )
                 )

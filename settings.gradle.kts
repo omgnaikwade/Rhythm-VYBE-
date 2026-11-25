@@ -26,6 +26,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Rhythm"
+rootProject.name = "VYBE"
 include(":app")
 include(":macrobenchmark")

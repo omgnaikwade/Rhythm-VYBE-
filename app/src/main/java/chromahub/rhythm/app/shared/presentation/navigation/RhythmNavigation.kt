@@ -186,49 +186,15 @@ fun RhythmNavigation(
             }
         ) {
             composable("main") {
-                AnimatedContent(
-                    targetState = appMode,
-                    modifier = Modifier.fillMaxSize(),
-                    transitionSpec = {
-                        fadeIn(
-                            animationSpec = tween(400)
-                        ) + slideInHorizontally(
-                            initialOffsetX = { if (targetState == "STREAMING") it else -it },
-                            animationSpec = tween(500, easing = EaseInOutQuart)
-                        ) togetherWith fadeOut(
-                            animationSpec = tween(400)
-                        ) + slideOutHorizontally(
-                            targetOffsetX = { if (targetState == "STREAMING") -it else it },
-                            animationSpec = tween(500, easing = EaseInOutQuart)
-                        )
-                    },
-                    label = "appModeTransition"
-                ) { mode ->
-                    when (mode) {
-                        "STREAMING" -> {
-                            // Streaming (Go) content is hosted on the shared Home/Library screens
-                            LocalNavigation(
-                                viewModel = musicViewModel,
-                                themeViewModel = themeViewModel,
-                                appSettings = appSettings,
-                                streamingMusicViewModel = streamingMusicViewModel
-                            )
-                        }
-
-                        else -> {
-                            // Use LocalNavigation for local mode (default)
-                            LocalNavigation(
-                                viewModel = musicViewModel,
-                                themeViewModel = themeViewModel,
-                                appSettings = appSettings,
-                                streamingMusicViewModel = streamingMusicViewModel
-                            )
-                        }
-                    }
-                }
+                LocalNavigation(
+                    viewModel = musicViewModel,
+                    themeViewModel = themeViewModel,
+                    appSettings = appSettings,
+                    streamingMusicViewModel = streamingMusicViewModel
+                )
             }
 
-            // Settings screen (shared between both modes)
+            // Settings screen
             composable(
                 route = "settings",
                 enterTransition = {
@@ -264,11 +230,6 @@ fun RhythmNavigation(
                 )
             }
         }
-
-        RhythmGuardWarningHost(
-            appSettings = appSettings,
-            musicViewModel = musicViewModel
-        )
         }
     }
 }

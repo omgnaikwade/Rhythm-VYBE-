@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import java.util.Properties
-import com.android.build.api.variant.FilterConfiguration
 
 val localProperties = Properties().also { props ->
     val f = rootProject.file("local.properties")
@@ -23,33 +22,56 @@ plugins {
 
 android {
     namespace = "chromahub.rhythm.app"
-    compileSdk {
-        version = release(37) {
-            minorApiLevel = 2
-        }
-    }
+    compileSdk = 37
 
     defaultConfig {
-        applicationId = "chromahub.rhythm.app"
+        applicationId = "app.vybe.music"
         minSdk = 26
         targetSdk = 37
         
         val overrideVersionCode = project.findProperty("versionCodeOverride")?.toString()?.toIntOrNull()
         val overrideVersionName = project.findProperty("versionNameOverride")?.toString()
-        versionCode = overrideVersionCode ?: 565061360
-        versionName = overrideVersionName ?: "5.6.506.1360"
+        versionCode = overrideVersionCode ?: 10000
+        versionName = overrideVersionName ?: "1.0.0"
 
         val overrideReleaseDate = project.findProperty("releaseDateOverride")?.toString()
-        buildConfigField("String", "RELEASE_DATE", "\"${overrideReleaseDate ?: "2026-11-24"}\"")
+        buildConfigField("String", "RELEASE_DATE", "\"${overrideReleaseDate ?: "2026-11-25"}\"")
 
         val isNightly = project.findProperty("nightly")?.toString() == "true"
         buildConfigField("boolean", "IS_NIGHTLY", isNightly.toString())
 
-        // Apple Music: fallback token from environment variable (GitHub secrets), local.properties, or fallback
-        val appleMusicToken = System.getenv("APPLE_MUSIC_FALLBACK_TOKEN")
-            ?: localProperties.getProperty("APPLE_MUSIC_FALLBACK_TOKEN")
-            ?: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6IldlYlBsYXlLaWQifQ.eyJpc3MiOiJBTVBXZWJQbGF5IiwiaWF0IjoxNzgxMDMyODU1LCJleHAiOjE3ODQwNTY4NTUsInJvb3RfaHR0cHNfb3JpZ2luIjpbImFwcGxlLmNvbSJdfQ.fiMFcJWkfSlxKP9NVA0UW9CbItD1Rge0SISuepz203XcpU762OqdCpU9M-YkmtKkjRmaIWtjsfGgqZPrlMonpA"
+        // VYBE Music Provider configuration (override in local.properties, Gradle properties, or env)
+        val musicProvider = (
+            project.findProperty("MUSIC_PROVIDER")?.toString()
+                ?: localProperties.getProperty("MUSIC_PROVIDER")
+                ?: System.getenv("MUSIC_PROVIDER")
+                ?: "dummy"
+            ).trim().replace("\"", "\\\"")
+        buildConfigField("String", "MUSIC_PROVIDER", "\"$musicProvider\"")
+
+        val vybeApiBaseUrl = (
+            project.findProperty("VYBE_API_BASE_URL")?.toString()
+                ?: localProperties.getProperty("VYBE_API_BASE_URL")
+                ?: System.getenv("VYBE_API_BASE_URL")
+                ?: ""
+            ).trim().replace("\"", "\\\"")
+        buildConfigField("String", "VYBE_API_BASE_URL", "\"$vybeApiBaseUrl\"")
+
+        // Optional lyrics/metadata token from environment or local.properties (never hardcoded)
+        val appleMusicToken = (
+            System.getenv("APPLE_MUSIC_FALLBACK_TOKEN")
+                ?: localProperties.getProperty("APPLE_MUSIC_FALLBACK_TOKEN")
+                ?: ""
+            ).trim().replace("\"", "\\\"")
         buildConfigField("String", "APPLE_MUSIC_FALLBACK_TOKEN", "\"$appleMusicToken\"")
+
+        buildConfigField("boolean", "ENABLE_YOUTUBE_MUSIC", "true")
+        buildConfigField("boolean", "ENABLE_LYRICALLY_API", "true")
+        buildConfigField("boolean", "ENABLE_DEEZER", "true")
+        buildConfigField("boolean", "ENABLE_LRCLIB", "true")
+        buildConfigField("boolean", "ENABLE_BETTERLYRICS", "true")
+        buildConfigField("boolean", "ENABLE_SPOTIFY_SEARCH", "true")
+        buildConfigField("boolean", "ENABLE_WIKIPEDIA", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -58,42 +80,12 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
-    // Product flavors for different distribution channels
-    flavorDimensions += "distribution"
-    
-    productFlavors {
-        create("fdroid") {
-            dimension = "distribution"
-            applicationId = "chromahub.rhythm.app"
-            
-            // F-Droid build: Enable all features (FOSS ethos)
-            buildConfigField("boolean", "ENABLE_YOUTUBE_MUSIC", "true")
-            buildConfigField("boolean", "ENABLE_LYRICALLY_API", "true")
-            buildConfigField("boolean", "ENABLE_DEEZER", "true")
-            buildConfigField("boolean", "ENABLE_LRCLIB", "true")
-            buildConfigField("boolean", "ENABLE_BETTERLYRICS", "true")
-            buildConfigField("boolean", "ENABLE_SPOTIFY_SEARCH", "true")
-            buildConfigField("boolean", "ENABLE_WIKIPEDIA", "true")
-            buildConfigField("String", "FLAVOR", "\"fdroid\"")
-            
-            versionNameSuffix = "-fdroid"
-        }
-        
-        create("github") {
-            dimension = "distribution"
-            applicationId = "chromahub.rhythm.app"
-            
-            // GitHub releases: Enable all features (same as F-Droid)
-            buildConfigField("boolean", "ENABLE_YOUTUBE_MUSIC", "true")
-            buildConfigField("boolean", "ENABLE_LYRICALLY_API", "true")
-            buildConfigField("boolean", "ENABLE_DEEZER", "true")
-            buildConfigField("boolean", "ENABLE_LRCLIB", "true")
-            buildConfigField("boolean", "ENABLE_BETTERLYRICS", "true")
-            buildConfigField("boolean", "ENABLE_SPOTIFY_SEARCH", "true")
-            buildConfigField("boolean", "ENABLE_WIKIPEDIA", "true")
-            buildConfigField("String", "FLAVOR", "\"github\"")
-            
-            versionNameSuffix = "-gh"
+    signingConfigs {
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 
@@ -106,10 +98,7 @@ android {
             storeFile = rootProject.file(signingProperties.property("store_file"))
         }
     } else {
-        signingConfigs.getByName("debug")
-    }
-
-    defaultConfig {
+        signingConfigs.getByName("debugConfig")
     }
 
     buildTypes {
@@ -138,9 +127,7 @@ android {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-            //isMinifyEnabled = false
-            //isDebuggable = true
-            signingConfig = releaseSigning
+            signingConfig = signingConfigs.getByName("debugConfig")
         }
         // Required by the macrobenchmark module for baseline profile generation.
         // Mirrors release (fully minified + signed) so the profile reflects production.
@@ -184,15 +171,7 @@ android {
         }
     }
 
-    // ABI splits: create smaller per-architecture APKs (reduces size by ~5–10 MB each)
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
-            isUniversalApk = true // also keep a universal APK for IzzyOnDroid/F-Droid
-        }
-    }
+
 
     lint {
         abortOnError = true
@@ -210,21 +189,7 @@ android {
 
 }
 
-androidComponents {
-    onVariants { variant ->
-        variant.outputs.forEach { output ->
-            val abiSuffix = output.filters
-                .find { it.filterType == FilterConfiguration.FilterType.ABI }
-                ?.identifier
-                ?.let { "-$it" }
-                ?: ""
 
-            output.outputFileName.set(
-                "Rhythm-${android.defaultConfig.versionName}-${variant.name}${abiSuffix}.apk"
-            )
-        }
-    }
-}
 
 dependencies {
     implementation(libs.androidx.compose.ui.unit)

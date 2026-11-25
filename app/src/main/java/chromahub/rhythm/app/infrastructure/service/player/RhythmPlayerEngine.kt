@@ -563,7 +563,7 @@ class RhythmPlayerEngine(
             .readTimeout(30, TimeUnit.SECONDS)
             .build()
         val httpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-            .setUserAgent("Rhythm/${chromahub.rhythm.app.BuildConfig.VERSION_NAME} (Android)")
+            .setUserAgent("VYBE/${chromahub.rhythm.app.BuildConfig.VERSION_NAME} (Android)")
         val cacheDataSourceFactory = CacheDataSource.Factory()
             .setCache(AudioCacheManager.getCache(context))
             .setUpstreamDataSourceFactory(httpDataSourceFactory)
@@ -575,6 +575,21 @@ class RhythmPlayerEngine(
             baseDataSourceFactory,
             object : ResolvingDataSource.Resolver {
                 override fun resolveDataSpec(dataSpec: DataSpec): DataSpec {
+                    if (dataSpec.uri.scheme == "vybe") {
+                        val trackId = dataSpec.uri.lastPathSegment
+                        if (!trackId.isNullOrBlank()) {
+                            val vybeRepo = chromahub.rhythm.app.vybe.di.VybeServiceLocator.provideMusicRepository(context)
+                            val result = runBlocking { vybeRepo.getStreamUrl(trackId) }
+                            val resolvedUrl = (result as? chromahub.rhythm.app.vybe.domain.model.VybeResult.Success)?.data
+                            if (!resolvedUrl.isNullOrBlank()) {
+                                return dataSpec.buildUpon()
+                                    .setUri(resolvedUrl.toUri())
+                                    .setKey("vybe_$trackId")
+                                    .build()
+                            }
+                            throw java.io.IOException("No playable stream URL returned by active VYBE provider for track $trackId")
+                        }
+                    }
                     if (dataSpec.uri.scheme == "streaming") {
                         val trackId = dataSpec.uri.lastPathSegment
                         if (!trackId.isNullOrBlank()) {
